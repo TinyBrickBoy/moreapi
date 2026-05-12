@@ -6,6 +6,7 @@ const { ProxyPool } = require('./proxyPool');
 const { loadAll, startRefreshing } = require('./proxySources');
 const { agentFor } = require('./proxyAgent');
 const { RateLimiter } = require('./rateLimiter');
+const { validateAll } = require('./proxyValidator');
 
 const configPath = process.env.CONFIG_PATH || path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -16,6 +17,14 @@ const defaults = {
   retryStatusCodes: config.retryStatusCodes ?? [408, 425, 429, 500, 502, 503, 504],
   cooldownMinutes: config.cooldownMinutes ?? 30,
   requestTimeoutSeconds: config.requestTimeoutSeconds ?? 20,
+  concurrency: config.concurrency ?? 3,
+};
+
+const validation = {
+  enabled: config.validation?.enabled ?? true,
+  testUrl: config.validation?.testUrl ?? 'https://www.google.com/generate_204',
+  timeoutMs: (config.validation?.timeoutSeconds ?? 8) * 1000,
+  concurrency: config.validation?.concurrency ?? 50,
 };
 
 const hostConfigs = new Map();
@@ -33,6 +42,7 @@ function hostConf(host) {
     maxRetries: h.maxRetries ?? defaults.maxRetries,
     retryStatusCodes: new Set(h.retryStatusCodes ?? defaults.retryStatusCodes),
     requestTimeoutMs: (h.requestTimeoutSeconds ?? defaults.requestTimeoutSeconds) * 1000,
+    concurrency: h.concurrency ?? defaults.concurrency,
     rateLimit: h.rateLimit,
   };
 }
@@ -50,16 +60,8 @@ function normalizeSources(cfg) {
 }
 
 const HOP_BY_HOP = new Set([
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailer',
-  'transfer-encoding',
-  'upgrade',
-  'host',
-  'content-length',
+  'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+  'te', 'trailer', 'transfer-encoding', 'upgrade', 'host', 'content-length',
 ]);
 
 function cleanRequestHeaders(raw, targetHost) {
@@ -78,6 +80,63 @@ function copyResponseHeaders(srcHeaders, res) {
     if (HOP_BY_HOP.has(lower)) return;
     if (lower === 'content-encoding') return;
     res.setHeader(key, value);
+  });
+}
+
+function maskProxy(url) {
+  return url.replace(/\/\/[^@]+@/, '//***@');
+}
+
+function raceProxies(entries, hConf, targetUrl, method, headers, body) {
+  return new Promise((resolve, reject) => {
+    const controllers = entries.map(() => new AbortController());
+    const timers = entries.map((_, i) =>
+      setTimeout(() => controllers[i].abort(), hConf.requestTimeoutMs),
+    );
+    const errors = [];
+    let resolved = false;
+    let pending = entries.length;
+
+    function settle() {
+      if (--pending === 0 && !resolved) {
+        reject(new Error(errors.join('; ') || 'no proxies'));
+      }
+    }
+
+    entries.forEach((entry, i) => {
+      fetch(targetUrl, {
+        method, headers, body,
+        agent: agentFor(entry.url),
+        redirect: 'manual',
+        signal: controllers[i].signal,
+      })
+        .then((response) => {
+          clearTimeout(timers[i]);
+          if (resolved) {
+            try { response.body?.destroy?.(); } catch (_) {}
+            return;
+          }
+          if (hConf.retryStatusCodes.has(response.status)) {
+            pool.cooldown(entry, `upstream status ${response.status}`);
+            errors.push(`${entry.url}: ${response.status}`);
+            try { response.body?.destroy?.(); } catch (_) {}
+            settle();
+            return;
+          }
+          resolved = true;
+          controllers.forEach((c, j) => { if (j !== i) c.abort(); });
+          resolve({ entry, response });
+        })
+        .catch((err) => {
+          clearTimeout(timers[i]);
+          if (resolved) return;
+          if (err.name !== 'AbortError') {
+            pool.cooldown(entry, `network error: ${err.message}`);
+            errors.push(`${entry.url}: ${err.message}`);
+          }
+          settle();
+        });
+    });
   });
 }
 
@@ -119,51 +178,50 @@ app.all('/:host/*', async (req, res) => {
 
   let lastError = null;
 
-  for (let attempt = 0; attempt < hConf.maxRetries; attempt++) {
-    const entry = pool.pick();
-    if (!entry) {
+  for (let round = 0; round < hConf.maxRetries; round++) {
+    const entries = [];
+    const seen = new Set();
+    for (let i = 0; i < hConf.concurrency; i++) {
+      const e = pool.pick();
+      if (!e || seen.has(e.url)) break;
+      seen.add(e.url);
+      entries.push(e);
+    }
+    if (!entries.length) {
       return res.status(503).json({ error: 'No proxies currently available', poolStatus: pool.status() });
     }
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), hConf.requestTimeoutMs);
-
     try {
-      const upstream = await fetch(targetUrl, {
-        method: req.method,
-        headers,
-        body,
-        agent: agentFor(entry.url),
-        redirect: 'manual',
-        signal: controller.signal,
-      });
-
-      if (hConf.retryStatusCodes.has(upstream.status)) {
-        pool.cooldown(entry, `upstream status ${upstream.status}`);
-        lastError = `upstream returned ${upstream.status}`;
-        continue;
-      }
-
-      res.status(upstream.status);
-      copyResponseHeaders(upstream.headers, res);
-      res.setHeader('x-proxy-used', entry.url.replace(/\/\/[^@]+@/, '//***@'));
-      const buf = Buffer.from(await upstream.arrayBuffer());
+      const { entry, response } = await raceProxies(entries, hConf, targetUrl, req.method, headers, body);
+      res.status(response.status);
+      copyResponseHeaders(response.headers, res);
+      res.setHeader('x-proxy-used', maskProxy(entry.url));
+      const buf = Buffer.from(await response.arrayBuffer());
       return res.send(buf);
     } catch (err) {
-      pool.cooldown(entry, `network error: ${err.message}`);
       lastError = err.message;
-    } finally {
-      clearTimeout(timer);
     }
   }
 
   res.status(502).json({ error: 'All proxy attempts failed', detail: lastError });
 });
 
-(async () => {
+async function loadAndValidate() {
   const urls = await loadAll(sources, baseDir);
+  if (!validation.enabled || urls.length === 0) return urls;
+  console.log(`[validate] testing ${urls.length} proxies against ${validation.testUrl} (timeout ${validation.timeoutMs}ms, concurrency ${validation.concurrency})`);
+  const t0 = Date.now();
+  const working = await validateAll(urls, validation);
+  console.log(`[validate] done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${working.length}/${urls.length} working`);
+  return working;
+}
+
+(async () => {
+  const urls = await loadAndValidate();
   pool.setProxies(urls);
-  startRefreshing(sources, baseDir, (fresh) => {
+
+  startRefreshing(sources, async () => {
+    const fresh = await loadAndValidate();
     pool.setProxies(fresh);
     console.log(`[pool] refreshed, ${fresh.length} proxies total`);
   });
