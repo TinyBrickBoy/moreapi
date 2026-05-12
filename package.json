@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "express": "^4.19.2",
-    "undici": "^6.19.8"
+    "https-proxy-agent": "^7.0.5",
+    "node-fetch": "^2.7.0",
+    "socks-proxy-agent": "^8.0.4"
   }
 }

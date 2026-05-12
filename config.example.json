@@ -2,13 +2,38 @@
   "port": 3000,
   "cooldownMinutes": 30,
   "maxRetries": 3,
+  "requestTimeoutSeconds": 20,
   "retryStatusCodes": [408, 425, 429, 500, 502, 503, 504],
   "allowedHosts": [
-    "api.onthepixel.net"
+    {
+      "host": "api.onthepixel.net",
+      "rateLimit": { "requests": 60, "windowSeconds": 60 },
+      "maxRetries": 5,
+      "retryStatusCodes": [429, 500, 502, 503, 504]
+    },
+    {
+      "host": "api.mojang.com",
+      "rateLimit": { "requests": 30, "windowSeconds": 60 }
+    },
+    "api.example.com"
   ],
-  "proxies": [
-    "http://user:pass@proxy1.example.com:8080",
-    "http://user:pass@proxy2.example.com:8080",
-    "http://proxy3.example.com:3128"
+  "proxySources": [
+    {
+      "type": "inline",
+      "proxies": [
+        "http://user:pass@proxy.example.com:8080"
+      ]
+    },
+    {
+      "type": "file",
+      "path": "./proxies.txt",
+      "scheme": "http"
+    },
+    {
+      "type": "url",
+      "url": "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/socks5.txt",
+      "scheme": "socks5",
+      "refreshMinutes": 60
+    }
   ]
 }
