@@ -49,6 +49,18 @@ Verwaltet die Proxy-Liste.
 - `cooldown(entry, reason)` – parkt einen Proxy für X Minuten
 - `status()` – aktueller Zustand aller Proxies
 
+### `proxyValidator.js`
+Pingt alle Proxies beim Start (und bei jedem Refresh) parallel gegen eine
+Test-URL und misst die Antwortzeit. Nur die, die antworten, kommen in den
+Pool, sortiert nach Ping (schnellster zuerst). Spart bei Listen wie
+TheSpeedX 90 % der toten Einträge.
+
+### `proxies.cache.json` (auto-generiert)
+Wird nach jeder Validation geschrieben (`{ updatedAt, proxies: [{url, pingMs}] }`).
+Beim nächsten Start lädt der Server diesen Cache **sofort** in den Pool und
+ist direkt einsatzbereit, während die frische Validation im Hintergrund
+läuft. Per `.gitignore` ausgeschlossen.
+
 ### `proxySources.js`
 Lädt Proxies aus drei Quellen.
 
@@ -78,10 +90,13 @@ Dependencies: `express`, `node-fetch`, `https-proxy-agent`, `socks-proxy-agent`.
 ## Request-Flow in einem Satz
 
 ```
-Request → server.js Route → Host-Check → Rate-Limit (rateLimiter)
-       → Proxy holen (proxyPool) → Agent bauen (proxyAgent)
-       → fetch zum Ziel → bei Fehler Cooldown + Retry
+Request → Host-Check → Rate-Limit → N Proxies aus dem Pool ziehen
+       → parallel fetchen, schnellste Antwort gewinnt, Rest abbrechen
+       → Loser/Fehler kriegen Cooldown → bei Bedarf nächste Runde
 ```
+
+`concurrency` (global oder per Host) steuert, wie viele Proxies pro Anfrage
+gleichzeitig laufen. Default = 3.
 
 ## Config-Referenz
 
@@ -91,7 +106,14 @@ Request → server.js Route → Host-Check → Rate-Limit (rateLimiter)
   "cooldownMinutes": 30,
   "maxRetries": 3,
   "requestTimeoutSeconds": 20,
+  "concurrency": 3,
   "retryStatusCodes": [408, 425, 429, 500, 502, 503, 504],
+  "validation": {
+    "enabled": true,
+    "testUrl": "https://www.google.com/generate_204",
+    "timeoutSeconds": 8,
+    "concurrency": 50
+  },
 
   "allowedHosts": [
     {
@@ -125,7 +147,12 @@ Request → server.js Route → Host-Check → Rate-Limit (rateLimiter)
 - `cooldownMinutes` – wie lange ein gefailter Proxy gesperrt wird
 - `maxRetries` – wie viele Proxies pro Anfrage probiert werden
 - `requestTimeoutSeconds` – Timeout pro Versuch
+- `concurrency` – wie viele Proxies pro Anfrage parallel laufen (Race, Schnellste gewinnt)
 - `retryStatusCodes` – Status-Codes, die einen Retry auf einem anderen Proxy auslösen
+- `validation.enabled` – beim Start (und Refresh) alle Proxies testen, nur funktionierende behalten
+- `validation.testUrl` – gegen welche URL getestet wird
+- `validation.timeoutSeconds` – Timeout pro Test
+- `validation.concurrency` – wie viele Proxies parallel getestet werden
 
 **`allowedHosts`** – Liste der erlaubten Ziel-Hosts. Entweder ein String
 (`"api.example.com"`) oder ein Objekt mit:

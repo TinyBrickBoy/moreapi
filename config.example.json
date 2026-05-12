@@ -3,7 +3,14 @@
   "cooldownMinutes": 30,
   "maxRetries": 3,
   "requestTimeoutSeconds": 20,
+  "concurrency": 3,
   "retryStatusCodes": [408, 425, 429, 500, 502, 503, 504],
+  "validation": {
+    "enabled": true,
+    "testUrl": "https://www.google.com/generate_204",
+    "timeoutSeconds": 8,
+    "concurrency": 50
+  },
   "allowedHosts": [
     {
       "host": "api.onthepixel.net",

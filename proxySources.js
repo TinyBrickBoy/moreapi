@@ -52,19 +52,19 @@ async function loadAll(sources, baseDir) {
   return [...new Set(results.flat())];
 }
 
-function startRefreshing(sources, baseDir, onUpdate) {
-  for (const source of sources) {
-    if (source.type !== 'url' || !source.refreshMinutes) continue;
-    const intervalMs = source.refreshMinutes * 60 * 1000;
-    setInterval(async () => {
-      try {
-        const fresh = await loadAll(sources, baseDir);
-        onUpdate(fresh);
-      } catch (err) {
-        console.warn(`[sources] refresh failed: ${err.message}`);
-      }
-    }, intervalMs).unref();
-  }
+function startRefreshing(sources, onTick) {
+  const minutes = sources
+    .filter((s) => s.type === 'url' && s.refreshMinutes)
+    .map((s) => s.refreshMinutes);
+  if (!minutes.length) return;
+  const intervalMs = Math.min(...minutes) * 60 * 1000;
+  setInterval(async () => {
+    try {
+      await onTick();
+    } catch (err) {
+      console.warn(`[sources] refresh failed: ${err.message}`);
+    }
+  }, intervalMs).unref();
 }
 
 module.exports = { loadAll, startRefreshing };
