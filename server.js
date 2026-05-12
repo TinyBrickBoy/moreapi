@@ -11,6 +11,26 @@ const { validateAll } = require('./proxyValidator');
 const configPath = process.env.CONFIG_PATH || path.join(__dirname, 'config.json');
 const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const baseDir = path.dirname(configPath);
+const cacheFile = config.cacheFile
+  ? path.isAbsolute(config.cacheFile) ? config.cacheFile : path.join(baseDir, config.cacheFile)
+  : path.join(baseDir, 'proxies.cache.json');
+
+function loadCache() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
+    return Array.isArray(raw.proxies) ? raw.proxies : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCache(entries) {
+  try {
+    fs.writeFileSync(cacheFile, JSON.stringify({ updatedAt: Date.now(), proxies: entries }, null, 2));
+  } catch (err) {
+    console.warn(`[cache] write failed: ${err.message}`);
+  }
+}
 
 const defaults = {
   maxRetries: config.maxRetries ?? 3,
@@ -216,15 +236,23 @@ async function loadAndValidate() {
   return working;
 }
 
-(async () => {
-  const urls = await loadAndValidate();
-  pool.setProxies(urls);
-
-  startRefreshing(sources, async () => {
-    const fresh = await loadAndValidate();
+async function refreshPool() {
+  const fresh = await loadAndValidate();
+  if (fresh.length) {
     pool.setProxies(fresh);
-    console.log(`[pool] refreshed, ${fresh.length} proxies total`);
-  });
+    saveCache(pool.serializable());
+    console.log(`[pool] ready: ${fresh.length} proxies (fastest ${fresh[0].pingMs}ms)`);
+  } else {
+    console.warn(`[pool] no working proxies found`);
+  }
+}
+
+(async () => {
+  const cached = loadCache();
+  if (cached.length) {
+    pool.setProxies(cached);
+    console.log(`[cache] preloaded ${cached.length} proxies (fastest ${cached[0].pingMs}ms)`);
+  }
 
   const port = config.port ?? 3000;
   app.listen(port, () => {
@@ -232,4 +260,7 @@ async function loadAndValidate() {
     console.log(`allowed hosts: ${[...hostConfigs.keys()].join(', ') || '(none)'}`);
     console.log(`proxies loaded: ${pool.entries.length}`);
   });
+
+  refreshPool().catch((err) => console.warn(`[pool] initial refresh failed: ${err.message}`));
+  startRefreshing(sources, refreshPool);
 })();

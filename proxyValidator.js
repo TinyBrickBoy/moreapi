@@ -4,6 +4,7 @@ const { agentFor } = require('./proxyAgent');
 async function checkOne(proxyUrl, testUrl, timeoutMs) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const t0 = Date.now();
   try {
     const res = await fetch(testUrl, {
       method: 'GET',
@@ -11,9 +12,10 @@ async function checkOne(proxyUrl, testUrl, timeoutMs) {
       signal: controller.signal,
       redirect: 'manual',
     });
-    return res.status < 500;
+    if (res.status >= 500) return null;
+    return Date.now() - t0;
   } catch {
-    return false;
+    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -30,8 +32,8 @@ async function validateAll(urls, { testUrl, timeoutMs, concurrency }) {
   const workers = Array.from({ length: Math.min(concurrency, total) }, async () => {
     while (queue.length) {
       const url = queue.shift();
-      const ok = await checkOne(url, testUrl, timeoutMs);
-      if (ok) working.push(url);
+      const pingMs = await checkOne(url, testUrl, timeoutMs);
+      if (pingMs !== null) working.push({ url, pingMs });
       done++;
       if (done % logEvery === 0 || done === total) {
         console.log(`[validate] ${done}/${total} checked, ${working.length} working`);
@@ -40,6 +42,7 @@ async function validateAll(urls, { testUrl, timeoutMs, concurrency }) {
   });
 
   await Promise.all(workers);
+  working.sort((a, b) => a.pingMs - b.pingMs);
   return working;
 }
 

@@ -5,11 +5,24 @@ class ProxyPool {
     this.cursor = 0;
   }
 
-  setProxies(urls) {
-    const byUrl = new Map(this.entries.map((e) => [e.url, e]));
-    this.entries = urls.map(
-      (url) => byUrl.get(url) || { url, cooldownUntil: 0, fails: 0 },
+  setProxies(incoming) {
+    const normalized = incoming.map((e) =>
+      typeof e === 'string' ? { url: e, pingMs: null } : { url: e.url, pingMs: e.pingMs ?? null },
     );
+    const byUrl = new Map(this.entries.map((e) => [e.url, e]));
+    this.entries = normalized
+      .map((n) => {
+        const old = byUrl.get(n.url);
+        if (old) {
+          return { ...old, pingMs: n.pingMs ?? old.pingMs };
+        }
+        return { url: n.url, pingMs: n.pingMs, cooldownUntil: 0, fails: 0 };
+      })
+      .sort((a, b) => {
+        const pa = a.pingMs ?? Infinity;
+        const pb = b.pingMs ?? Infinity;
+        return pa - pb;
+      });
     if (this.cursor >= this.entries.length) this.cursor = 0;
   }
 
@@ -31,10 +44,17 @@ class ProxyPool {
     console.warn(`[pool] cooldown ${entry.url} until ${until} (${reason})`);
   }
 
+  serializable() {
+    return this.entries
+      .filter((e) => e.pingMs !== null && e.pingMs !== undefined)
+      .map((e) => ({ url: e.url, pingMs: e.pingMs }));
+  }
+
   status() {
     const now = Date.now();
     return this.entries.map((e) => ({
       url: e.url,
+      pingMs: e.pingMs,
       available: e.cooldownUntil <= now,
       cooldownRemainingMs: Math.max(0, e.cooldownUntil - now),
       fails: e.fails,

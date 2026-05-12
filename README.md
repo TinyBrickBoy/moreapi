@@ -51,8 +51,15 @@ Verwaltet die Proxy-Liste.
 
 ### `proxyValidator.js`
 Pingt alle Proxies beim Start (und bei jedem Refresh) parallel gegen eine
-Test-URL. Nur die, die antworten, kommen in den Pool. Spart bei Listen wie
+Test-URL und misst die Antwortzeit. Nur die, die antworten, kommen in den
+Pool, sortiert nach Ping (schnellster zuerst). Spart bei Listen wie
 TheSpeedX 90 % der toten Einträge.
+
+### `proxies.cache.json` (auto-generiert)
+Wird nach jeder Validation geschrieben (`{ updatedAt, proxies: [{url, pingMs}] }`).
+Beim nächsten Start lädt der Server diesen Cache **sofort** in den Pool und
+ist direkt einsatzbereit, während die frische Validation im Hintergrund
+läuft. Per `.gitignore` ausgeschlossen.
 
 ### `proxySources.js`
 Lädt Proxies aus drei Quellen.
