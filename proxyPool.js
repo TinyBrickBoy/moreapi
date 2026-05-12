@@ -1,8 +1,16 @@
 class ProxyPool {
-  constructor(proxies, cooldownMs) {
-    this.entries = proxies.map((url) => ({ url, cooldownUntil: 0, fails: 0 }));
+  constructor(cooldownMs) {
+    this.entries = [];
     this.cooldownMs = cooldownMs;
     this.cursor = 0;
+  }
+
+  setProxies(urls) {
+    const byUrl = new Map(this.entries.map((e) => [e.url, e]));
+    this.entries = urls.map(
+      (url) => byUrl.get(url) || { url, cooldownUntil: 0, fails: 0 },
+    );
+    if (this.cursor >= this.entries.length) this.cursor = 0;
   }
 
   pick() {
