@@ -2,7 +2,6 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const fetch = require('node-fetch');
-const { AbortController } = require('node-fetch');
 const { ProxyPool } = require('./proxyPool');
 const { loadAll, startRefreshing } = require('./proxySources');
 const { agentFor } = require('./proxyAgent');
