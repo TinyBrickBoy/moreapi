@@ -21,7 +21,7 @@ async function checkOne(proxyUrl, testUrl, timeoutMs) {
   }
 }
 
-async function validateAll(urls, { testUrl, timeoutMs, concurrency }) {
+async function validateAll(urls, { testUrl, timeoutMs, concurrency }, onResult) {
   if (!urls.length) return [];
   const queue = urls.slice();
   const working = [];
@@ -33,7 +33,13 @@ async function validateAll(urls, { testUrl, timeoutMs, concurrency }) {
     while (queue.length) {
       const url = queue.shift();
       const pingMs = await checkOne(url, testUrl, timeoutMs);
-      if (pingMs !== null) working.push({ url, pingMs });
+      if (pingMs !== null) {
+        const entry = { url, pingMs };
+        working.push(entry);
+        if (onResult) {
+          try { onResult(entry); } catch (_) {}
+        }
+      }
       done++;
       if (done % logEvery === 0 || done === total) {
         console.log(`[validate] ${done}/${total} checked, ${working.length} working`);

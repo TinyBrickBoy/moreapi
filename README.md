@@ -50,10 +50,11 @@ Verwaltet die Proxy-Liste.
 - `status()` – aktueller Zustand aller Proxies
 
 ### `proxyValidator.js`
-Pingt alle Proxies beim Start (und bei jedem Refresh) parallel gegen eine
-Test-URL und misst die Antwortzeit. Nur die, die antworten, kommen in den
-Pool, sortiert nach Ping (schnellster zuerst). Spart bei Listen wie
-TheSpeedX 90 % der toten Einträge.
+Pingt alle Proxies parallel gegen eine Test-URL und misst die Antwortzeit.
+Funktionierende Proxies werden **sofort** in den Pool gestreamt (per
+`onResult`-Callback) – der Server muss also nicht warten, bis alle 5000
+geprüft sind, sondern kann direkt Anfragen bedienen, sobald die ersten
+paar durchkommen. Defaults: Concurrency 200, Timeout 5 s.
 
 ### `proxies.cache.json` (auto-generiert)
 Wird nach jeder Validation geschrieben (`{ updatedAt, proxies: [{url, pingMs}] }`).

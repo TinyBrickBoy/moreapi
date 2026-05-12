@@ -43,8 +43,8 @@ const defaults = {
 const validation = {
   enabled: config.validation?.enabled ?? true,
   testUrl: config.validation?.testUrl ?? 'https://www.google.com/generate_204',
-  timeoutMs: (config.validation?.timeoutSeconds ?? 8) * 1000,
-  concurrency: config.validation?.concurrency ?? 50,
+  timeoutMs: (config.validation?.timeoutSeconds ?? 5) * 1000,
+  concurrency: config.validation?.concurrency ?? 200,
 };
 
 const hostConfigs = new Map();
@@ -113,6 +113,7 @@ function raceProxies(entries, hConf, targetUrl, method, headers, body) {
     const timers = entries.map((_, i) =>
       setTimeout(() => controllers[i].abort(), hConf.requestTimeoutMs),
     );
+    const startedAt = entries.map(() => Date.now());
     const errors = [];
     let resolved = false;
     let pending = entries.length;
@@ -144,8 +145,9 @@ function raceProxies(entries, hConf, targetUrl, method, headers, body) {
             return;
           }
           resolved = true;
+          const pingMs = Date.now() - startedAt[i];
           controllers.forEach((c, j) => { if (j !== i) c.abort(); });
-          resolve({ entry, response });
+          resolve({ entry, response, pingMs });
         })
         .catch((err) => {
           clearTimeout(timers[i]);
@@ -158,6 +160,21 @@ function raceProxies(entries, hConf, targetUrl, method, headers, body) {
         });
     });
   });
+}
+
+let cacheDirty = false;
+let cacheTimer = null;
+function scheduleCacheWrite() {
+  cacheDirty = true;
+  if (cacheTimer) return;
+  cacheTimer = setTimeout(() => {
+    cacheTimer = null;
+    if (!cacheDirty) return;
+    cacheDirty = false;
+    pool.resort();
+    saveCache(pool.serializable());
+  }, 5000);
+  cacheTimer.unref();
 }
 
 const app = express();
@@ -212,10 +229,13 @@ app.all('/:host/*', async (req, res) => {
     }
 
     try {
-      const { entry, response } = await raceProxies(entries, hConf, targetUrl, req.method, headers, body);
+      const { entry, response, pingMs } = await raceProxies(entries, hConf, targetUrl, req.method, headers, body);
+      pool.recordSuccess(entry, pingMs);
+      scheduleCacheWrite();
       res.status(response.status);
       copyResponseHeaders(response.headers, res);
       res.setHeader('x-proxy-used', maskProxy(entry.url));
+      res.setHeader('x-proxy-ping', String(pingMs));
       const buf = Buffer.from(await response.arrayBuffer());
       return res.send(buf);
     } catch (err) {
@@ -226,25 +246,34 @@ app.all('/:host/*', async (req, res) => {
   res.status(502).json({ error: 'All proxy attempts failed', detail: lastError });
 });
 
-async function loadAndValidate() {
-  const urls = await loadAll(sources, baseDir);
-  if (!validation.enabled || urls.length === 0) return urls;
-  console.log(`[validate] testing ${urls.length} proxies against ${validation.testUrl} (timeout ${validation.timeoutMs}ms, concurrency ${validation.concurrency})`);
-  const t0 = Date.now();
-  const working = await validateAll(urls, validation);
-  console.log(`[validate] done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${working.length}/${urls.length} working`);
-  return working;
-}
-
 async function refreshPool() {
-  const fresh = await loadAndValidate();
-  if (fresh.length) {
-    pool.setProxies(fresh);
-    saveCache(pool.serializable());
-    console.log(`[pool] ready: ${fresh.length} proxies (fastest ${fresh[0].pingMs}ms)`);
-  } else {
-    console.warn(`[pool] no working proxies found`);
+  const urls = await loadAll(sources, baseDir);
+  if (!urls.length) {
+    console.warn('[pool] no proxies in sources');
+    return;
   }
+  if (!validation.enabled) {
+    pool.setProxies(urls);
+    saveCache(pool.serializable());
+    return;
+  }
+
+  console.log(`[validate] testing ${urls.length} proxies (timeout ${validation.timeoutMs}ms, concurrency ${validation.concurrency}); pool fills as proxies pass`);
+  const t0 = Date.now();
+  let added = 0;
+
+  const fresh = await validateAll(urls, validation, (entry) => {
+    pool.upsert(entry);
+    added++;
+    if (added === 1 || added % 25 === 0) {
+      console.log(`[pool] +${added} proxies live (latest ${entry.url} @ ${entry.pingMs}ms)`);
+    }
+    scheduleCacheWrite();
+  });
+
+  pool.setProxies(fresh);
+  saveCache(pool.serializable());
+  console.log(`[validate] done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${fresh.length}/${urls.length} working${fresh.length ? `, fastest ${fresh[0].pingMs}ms` : ''}`);
 }
 
 (async () => {
