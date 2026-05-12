@@ -1,0 +1,14 @@
+{
+  "port": 3000,
+  "cooldownMinutes": 30,
+  "maxRetries": 3,
+  "retryStatusCodes": [408, 425, 429, 500, 502, 503, 504],
+  "allowedHosts": [
+    "api.onthepixel.net"
+  ],
+  "proxies": [
+    "http://user:pass@proxy1.example.com:8080",
+    "http://user:pass@proxy2.example.com:8080",
+    "http://proxy3.example.com:3128"
+  ]
+}
