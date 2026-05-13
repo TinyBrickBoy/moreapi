@@ -8,8 +8,11 @@
   "retryStatusCodes": [408, 425, 429, 500, 502, 503, 504],
   "validation": {
     "enabled": true,
-    "timeoutSeconds": 3,
-    "concurrency": 500
+    "mode": "http",
+    "tcpTimeoutSeconds": 3,
+    "httpTimeoutSeconds": 6,
+    "checkUrl": "https://www.gstatic.com/generate_204",
+    "concurrency": 200
   },
   "allowedHosts": [
     {
