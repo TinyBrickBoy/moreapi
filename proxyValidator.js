@@ -15,22 +15,81 @@ function tcpPing(host, port, timeoutMs) {
     const timer = setTimeout(() => finish(null), timeoutMs);
     socket.once('connect', () => finish(Date.now() - t0));
     socket.once('error', () => finish(null));
-    try {
-      socket.connect(port, host);
-    } catch {
-      finish(null);
-    }
+    try { socket.connect(port, host); } catch { finish(null); }
+  });
+}
+
+function socks5Handshake(host, port, timeoutMs) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const t0 = Date.now();
+    let done = false;
+    let buf = Buffer.alloc(0);
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    socket.once('connect', () => {
+      // greeting: VER=5, NMETHODS=1, METHODS=[NO_AUTH]
+      socket.write(Buffer.from([0x05, 0x01, 0x00]));
+    });
+    socket.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.length < 2) return;
+      // VER=5, METHOD=0x00 means no-auth accepted
+      if (buf[0] === 0x05 && buf[1] === 0x00) finish(Date.now() - t0);
+      else finish(null);
+    });
+    socket.once('error', () => finish(null));
+    try { socket.connect(port, host); } catch { finish(null); }
+  });
+}
+
+function socks4Handshake(host, port, timeoutMs) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const t0 = Date.now();
+    let done = false;
+    let buf = Buffer.alloc(0);
+    const finish = (result) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    socket.once('connect', () => {
+      // SOCKS4 CONNECT to 1.1.1.1:80, userid empty
+      const req = Buffer.from([0x04, 0x01, 0x00, 0x50, 1, 1, 1, 1, 0x00]);
+      socket.write(req);
+    });
+    socket.on('data', (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      if (buf.length < 2) return;
+      if (buf[0] === 0x00 && buf[1] === 0x5a) finish(Date.now() - t0);
+      else finish(null);
+    });
+    socket.once('error', () => finish(null));
+    try { socket.connect(port, host); } catch { finish(null); }
   });
 }
 
 async function checkOne(proxyUrl, timeoutMs) {
   let u;
-  try {
-    u = new URL(proxyUrl);
-  } catch {
-    return null;
+  try { u = new URL(proxyUrl); } catch { return null; }
+  const proto = u.protocol.replace(':', '').toLowerCase();
+  const port = parseInt(u.port, 10) || (proto === 'https' ? 443 : 80);
+  if (proto === 'socks5' || proto === 'socks5h' || proto === 'socks') {
+    return socks5Handshake(u.hostname, port, timeoutMs);
   }
-  const port = parseInt(u.port, 10) || (u.protocol === 'https:' ? 443 : 80);
+  if (proto === 'socks4' || proto === 'socks4a') {
+    return socks4Handshake(u.hostname, port, timeoutMs);
+  }
   return tcpPing(u.hostname, port, timeoutMs);
 }
 

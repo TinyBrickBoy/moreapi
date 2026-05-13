@@ -50,13 +50,17 @@ Verwaltet die Proxy-Liste.
 - `status()` – aktueller Zustand aller Proxies
 
 ### `proxyValidator.js`
-Macht für jeden Proxy einen reinen TCP-Connect zum Proxy-Port. Tote Proxies
-fallen in Millisekunden raus, ohne SOCKS-Handshake oder HTTPS-Roundtrip.
-Lebende Proxies (Port offen) werden **sofort** per `onResult`-Callback in
-den Pool gestreamt — der Server bedient Anfragen schon, während der Sweep
-noch läuft. Defaults: Concurrency 500, Timeout 3 s. Falsch-Positive (Port
-offen, aber SOCKS antwortet nicht) fängt der race+cooldown beim ersten
-echten Request ab.
+Validiert pro Proxy abhängig vom Schema:
+- **socks5/socks5h** → echter SOCKS5-Greeting-Handshake (`0x05 0x01 0x00`),
+  akzeptiert nur Server, die `NO_AUTH` (`0x05 0x00`) zurückgeben. Sortiert
+  also Auth-pflichtige Proxies (`no accepted authentication type`) und
+  HTTP-Server auf SOCKS-Ports raus.
+- **socks4/socks4a** → SOCKS4-CONNECT-Probe.
+- **http/https** → reiner TCP-Connect.
+
+Lebende Proxies werden **sofort** per `onResult`-Callback in den Pool
+gestreamt — der Server bedient Anfragen schon, während der Sweep läuft.
+Defaults: Concurrency 500, Timeout 3 s.
 
 ### `proxies.cache.json` (auto-generiert)
 Wird nach jeder Validation geschrieben (`{ updatedAt, proxies: [{url, pingMs}] }`).
