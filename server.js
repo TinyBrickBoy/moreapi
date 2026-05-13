@@ -50,8 +50,11 @@ function applyConfig(cfg) {
   };
   validation = {
     enabled: cfg.validation?.enabled ?? true,
-    timeoutMs: (cfg.validation?.timeoutSeconds ?? 3) * 1000,
-    concurrency: cfg.validation?.concurrency ?? 500,
+    mode: cfg.validation?.mode ?? 'http',
+    tcpTimeoutMs: (cfg.validation?.tcpTimeoutSeconds ?? cfg.validation?.timeoutSeconds ?? 3) * 1000,
+    httpTimeoutMs: (cfg.validation?.httpTimeoutSeconds ?? 6) * 1000,
+    checkUrl: cfg.validation?.checkUrl ?? 'https://www.gstatic.com/generate_204',
+    concurrency: cfg.validation?.concurrency ?? 200,
   };
   hostConfigs = buildHostConfigs(cfg);
   sources = normalizeSources(cfg);
@@ -280,7 +283,7 @@ async function refreshPool() {
     return;
   }
 
-  console.log(`[validate] tcp-checking ${urls.length} proxies (timeout ${validation.timeoutMs}ms, concurrency ${validation.concurrency}); pool fills as proxies pass`);
+  console.log(`[validate] ${validation.mode}-checking ${urls.length} proxies (tcp ${validation.tcpTimeoutMs}ms${validation.mode === 'http' ? `, http ${validation.httpTimeoutMs}ms via ${validation.checkUrl}` : ''}, concurrency ${validation.concurrency}); pool fills as proxies pass`);
   const t0 = Date.now();
   let added = 0;
 
