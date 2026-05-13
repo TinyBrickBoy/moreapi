@@ -9,11 +9,54 @@ const { RateLimiter } = require('./rateLimiter');
 const { validateAll } = require('./proxyValidator');
 
 const configPath = process.env.CONFIG_PATH || path.join(__dirname, 'config.json');
-const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 const baseDir = path.dirname(configPath);
+
+function readConfigFile() {
+  return JSON.parse(fs.readFileSync(configPath, 'utf8'));
+}
+
+let config = readConfigFile();
 const cacheFile = config.cacheFile
   ? path.isAbsolute(config.cacheFile) ? config.cacheFile : path.join(baseDir, config.cacheFile)
   : path.join(baseDir, 'proxies.cache.json');
+
+let defaults, validation, hostConfigs, sources;
+let refreshTimerStop = null;
+
+function normalizeSources(cfg) {
+  if (Array.isArray(cfg.proxySources) && cfg.proxySources.length) return cfg.proxySources;
+  if (Array.isArray(cfg.proxies) && cfg.proxies.length) {
+    return [{ type: 'inline', proxies: cfg.proxies }];
+  }
+  return [];
+}
+
+function buildHostConfigs(cfg) {
+  const m = new Map();
+  for (const entry of cfg.allowedHosts ?? []) {
+    if (typeof entry === 'string') m.set(entry, { host: entry });
+    else if (entry && entry.host) m.set(entry.host, entry);
+  }
+  return m;
+}
+
+function applyConfig(cfg) {
+  defaults = {
+    maxRetries: cfg.maxRetries ?? 3,
+    retryStatusCodes: cfg.retryStatusCodes ?? [408, 425, 429, 500, 502, 503, 504],
+    cooldownMinutes: cfg.cooldownMinutes ?? 30,
+    requestTimeoutSeconds: cfg.requestTimeoutSeconds ?? 20,
+    concurrency: cfg.concurrency ?? 3,
+  };
+  validation = {
+    enabled: cfg.validation?.enabled ?? true,
+    timeoutMs: (cfg.validation?.timeoutSeconds ?? 3) * 1000,
+    concurrency: cfg.validation?.concurrency ?? 500,
+  };
+  hostConfigs = buildHostConfigs(cfg);
+  sources = normalizeSources(cfg);
+  if (pool) pool.setCooldownMs(defaults.cooldownMinutes * 60 * 1000);
+}
 
 function loadCache() {
   try {
@@ -32,29 +75,6 @@ function saveCache(entries) {
   }
 }
 
-const defaults = {
-  maxRetries: config.maxRetries ?? 3,
-  retryStatusCodes: config.retryStatusCodes ?? [408, 425, 429, 500, 502, 503, 504],
-  cooldownMinutes: config.cooldownMinutes ?? 30,
-  requestTimeoutSeconds: config.requestTimeoutSeconds ?? 20,
-  concurrency: config.concurrency ?? 3,
-};
-
-const validation = {
-  enabled: config.validation?.enabled ?? true,
-  timeoutMs: (config.validation?.timeoutSeconds ?? 3) * 1000,
-  concurrency: config.validation?.concurrency ?? 500,
-};
-
-const hostConfigs = new Map();
-for (const entry of config.allowedHosts ?? []) {
-  if (typeof entry === 'string') {
-    hostConfigs.set(entry, { host: entry });
-  } else if (entry && entry.host) {
-    hostConfigs.set(entry.host, entry);
-  }
-}
-
 function hostConf(host) {
   const h = hostConfigs.get(host) || {};
   return {
@@ -66,17 +86,9 @@ function hostConf(host) {
   };
 }
 
-const pool = new ProxyPool(defaults.cooldownMinutes * 60 * 1000);
+const pool = new ProxyPool(30 * 60 * 1000);
 const limiter = new RateLimiter();
-const sources = normalizeSources(config);
-
-function normalizeSources(cfg) {
-  if (Array.isArray(cfg.proxySources) && cfg.proxySources.length) return cfg.proxySources;
-  if (Array.isArray(cfg.proxies) && cfg.proxies.length) {
-    return [{ type: 'inline', proxies: cfg.proxies }];
-  }
-  return [];
-}
+applyConfig(config);
 
 const HOP_BY_HOP = new Set([
   'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
@@ -184,7 +196,18 @@ app.get('/_status', (_req, res) => {
     proxies: pool.status(),
     hosts: [...hostConfigs.values()],
     sources: sources.map((s) => ({ type: s.type, url: s.url, path: s.path, scheme: s.scheme })),
+    configPath,
+    hotReload: config.hotReload !== false,
   });
+});
+
+app.post('/_reload', (_req, res) => {
+  try {
+    reloadConfig({ force: true });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 app.all('/:host/*', async (req, res) => {
@@ -275,6 +298,45 @@ async function refreshPool() {
   console.log(`[validate] done in ${((Date.now() - t0) / 1000).toFixed(1)}s — ${fresh.length}/${urls.length} working${fresh.length ? `, fastest ${fresh[0].pingMs}ms` : ''}`);
 }
 
+function reloadConfig({ force = false } = {}) {
+  let next;
+  try {
+    next = readConfigFile();
+  } catch (err) {
+    console.warn(`[config] reload failed: ${err.message}`);
+    return;
+  }
+
+  const oldSources = JSON.stringify(sources);
+  const oldHosts = JSON.stringify([...hostConfigs.entries()]);
+  config = next;
+  applyConfig(next);
+  console.log('[config] reloaded');
+
+  const newHosts = JSON.stringify([...hostConfigs.entries()]);
+  if (oldHosts !== newHosts) {
+    console.log(`[config] allowedHosts: ${[...hostConfigs.keys()].join(', ') || '(none)'}`);
+  }
+
+  const newSources = JSON.stringify(sources);
+  if (force || oldSources !== newSources) {
+    if (refreshTimerStop) refreshTimerStop();
+    refreshTimerStop = startRefreshing(sources, refreshPool);
+    refreshPool().catch((err) => console.warn(`[pool] refresh after reload failed: ${err.message}`));
+  }
+}
+
+function watchConfig() {
+  if (config.hotReload === false) {
+    console.log('[config] hot-reload disabled');
+    return;
+  }
+  fs.watchFile(configPath, { interval: 1000 }, (curr, prev) => {
+    if (curr.mtimeMs !== prev.mtimeMs) reloadConfig();
+  });
+  console.log(`[config] watching ${configPath} for changes`);
+}
+
 (async () => {
   const cached = loadCache();
   if (cached.length) {
@@ -290,5 +352,6 @@ async function refreshPool() {
   });
 
   refreshPool().catch((err) => console.warn(`[pool] initial refresh failed: ${err.message}`));
-  startRefreshing(sources, refreshPool);
+  refreshTimerStop = startRefreshing(sources, refreshPool);
+  watchConfig();
 })();

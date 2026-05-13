@@ -5,6 +5,10 @@ class ProxyPool {
     this.cursor = 0;
   }
 
+  setCooldownMs(ms) {
+    this.cooldownMs = ms;
+  }
+
   setProxies(incoming, { keepRecentlyUsedMs = 30 * 60 * 1000 } = {}) {
     const normalized = incoming.map((e) =>
       typeof e === 'string'

@@ -56,15 +56,17 @@ function startRefreshing(sources, onTick) {
   const minutes = sources
     .filter((s) => s.type === 'url' && s.refreshMinutes)
     .map((s) => s.refreshMinutes);
-  if (!minutes.length) return;
+  if (!minutes.length) return () => {};
   const intervalMs = Math.min(...minutes) * 60 * 1000;
-  setInterval(async () => {
+  const handle = setInterval(async () => {
     try {
       await onTick();
     } catch (err) {
       console.warn(`[sources] refresh failed: ${err.message}`);
     }
-  }, intervalMs).unref();
+  }, intervalMs);
+  handle.unref();
+  return () => clearInterval(handle);
 }
 
 module.exports = { loadAll, startRefreshing };

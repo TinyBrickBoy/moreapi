@@ -146,6 +146,7 @@ gleichzeitig laufen. Default = 3.
 
 **Global (Defaults für alle Hosts):**
 - `port` – auf welchem Port der Server hört
+- `hotReload` – wenn `true` (Default), werden Änderungen an `config.json` automatisch übernommen, ohne Restart. Manuell triggerbar via `POST /_reload`.
 - `cooldownMinutes` – wie lange ein gefailter Proxy gesperrt wird
 - `maxRetries` – wie viele Proxies pro Anfrage probiert werden
 - `requestTimeoutSeconds` – Timeout pro Versuch

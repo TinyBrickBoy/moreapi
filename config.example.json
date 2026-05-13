@@ -1,5 +1,6 @@
 {
   "port": 3000,
+  "hotReload": true,
   "cooldownMinutes": 30,
   "maxRetries": 3,
   "requestTimeoutSeconds": 20,
