@@ -50,11 +50,13 @@ Verwaltet die Proxy-Liste.
 - `status()` – aktueller Zustand aller Proxies
 
 ### `proxyValidator.js`
-Pingt alle Proxies parallel gegen eine Test-URL und misst die Antwortzeit.
-Funktionierende Proxies werden **sofort** in den Pool gestreamt (per
-`onResult`-Callback) – der Server muss also nicht warten, bis alle 5000
-geprüft sind, sondern kann direkt Anfragen bedienen, sobald die ersten
-paar durchkommen. Defaults: Concurrency 200, Timeout 5 s.
+Macht für jeden Proxy einen reinen TCP-Connect zum Proxy-Port. Tote Proxies
+fallen in Millisekunden raus, ohne SOCKS-Handshake oder HTTPS-Roundtrip.
+Lebende Proxies (Port offen) werden **sofort** per `onResult`-Callback in
+den Pool gestreamt — der Server bedient Anfragen schon, während der Sweep
+noch läuft. Defaults: Concurrency 500, Timeout 3 s. Falsch-Positive (Port
+offen, aber SOCKS antwortet nicht) fängt der race+cooldown beim ersten
+echten Request ab.
 
 ### `proxies.cache.json` (auto-generiert)
 Wird nach jeder Validation geschrieben (`{ updatedAt, proxies: [{url, pingMs}] }`).
@@ -111,9 +113,8 @@ gleichzeitig laufen. Default = 3.
   "retryStatusCodes": [408, 425, 429, 500, 502, 503, 504],
   "validation": {
     "enabled": true,
-    "testUrl": "https://www.google.com/generate_204",
-    "timeoutSeconds": 8,
-    "concurrency": 50
+    "timeoutSeconds": 3,
+    "concurrency": 500
   },
 
   "allowedHosts": [
@@ -145,14 +146,14 @@ gleichzeitig laufen. Default = 3.
 
 **Global (Defaults für alle Hosts):**
 - `port` – auf welchem Port der Server hört
+- `hotReload` – wenn `true` (Default), werden Änderungen an `config.json` automatisch übernommen, ohne Restart. Manuell triggerbar via `POST /_reload`.
 - `cooldownMinutes` – wie lange ein gefailter Proxy gesperrt wird
 - `maxRetries` – wie viele Proxies pro Anfrage probiert werden
 - `requestTimeoutSeconds` – Timeout pro Versuch
 - `concurrency` – wie viele Proxies pro Anfrage parallel laufen (Race, Schnellste gewinnt)
 - `retryStatusCodes` – Status-Codes, die einen Retry auf einem anderen Proxy auslösen
-- `validation.enabled` – beim Start (und Refresh) alle Proxies testen, nur funktionierende behalten
-- `validation.testUrl` – gegen welche URL getestet wird
-- `validation.timeoutSeconds` – Timeout pro Test
+- `validation.enabled` – beim Start (und Refresh) per TCP-Connect prüfen, ob der Proxy-Port überhaupt offen ist
+- `validation.timeoutSeconds` – Timeout pro TCP-Connect
 - `validation.concurrency` – wie viele Proxies parallel getestet werden
 
 **`allowedHosts`** – Liste der erlaubten Ziel-Hosts. Entweder ein String

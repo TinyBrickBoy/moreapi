@@ -1,5 +1,6 @@
 {
   "port": 3000,
+  "hotReload": true,
   "cooldownMinutes": 30,
   "maxRetries": 3,
   "requestTimeoutSeconds": 20,
@@ -7,9 +8,8 @@
   "retryStatusCodes": [408, 425, 429, 500, 502, 503, 504],
   "validation": {
     "enabled": true,
-    "testUrl": "https://www.google.com/generate_204",
-    "timeoutSeconds": 8,
-    "concurrency": 50
+    "timeoutSeconds": 3,
+    "concurrency": 500
   },
   "allowedHosts": [
     {
