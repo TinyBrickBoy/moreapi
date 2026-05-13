@@ -42,9 +42,8 @@ const defaults = {
 
 const validation = {
   enabled: config.validation?.enabled ?? true,
-  testUrl: config.validation?.testUrl ?? 'https://www.google.com/generate_204',
-  timeoutMs: (config.validation?.timeoutSeconds ?? 5) * 1000,
-  concurrency: config.validation?.concurrency ?? 200,
+  timeoutMs: (config.validation?.timeoutSeconds ?? 3) * 1000,
+  concurrency: config.validation?.concurrency ?? 500,
 };
 
 const hostConfigs = new Map();
@@ -258,7 +257,7 @@ async function refreshPool() {
     return;
   }
 
-  console.log(`[validate] testing ${urls.length} proxies (timeout ${validation.timeoutMs}ms, concurrency ${validation.concurrency}); pool fills as proxies pass`);
+  console.log(`[validate] tcp-checking ${urls.length} proxies (timeout ${validation.timeoutMs}ms, concurrency ${validation.concurrency}); pool fills as proxies pass`);
   const t0 = Date.now();
   let added = 0;
 
